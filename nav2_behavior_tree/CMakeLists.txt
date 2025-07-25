@@ -185,6 +185,9 @@ list(APPEND plugin_libs nav2_navigate_to_pose_action_bt_node)
 add_library(nav2_navigate_through_poses_action_bt_node SHARED plugins/action/navigate_through_poses_action.cpp)
 list(APPEND plugin_libs nav2_navigate_through_poses_action_bt_node)
 
+add_library(nav2_remove_goal_by_id_action_bt_node SHARED plugins/action/remove_goal_by_id_action.cpp)
+list(APPEND plugin_libs nav2_remove_goal_by_id_action_bt_node)
+
 add_library(nav2_remove_passed_goals_action_bt_node SHARED plugins/action/remove_passed_goals_action.cpp)
 list(APPEND plugin_libs nav2_remove_passed_goals_action_bt_node)
 
@@ -264,6 +267,9 @@ foreach(bt_plugin ${plugin_libs})
   )
   target_compile_definitions(${bt_plugin} PRIVATE BT_PLUGIN_EXPORT)
 endforeach()
+
+# print  ${plugin_libs}
+message(STATUS "Behavior Tree plugins: ${plugin_libs}")
 
 install(TARGETS ${library_name} ${plugin_libs}
   EXPORT ${library_name}
