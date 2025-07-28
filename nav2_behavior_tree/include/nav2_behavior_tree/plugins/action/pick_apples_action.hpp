@@ -1,0 +1,85 @@
+// Copyright (c) 2025 Flyps
+
+#ifndef NAV2_BEHAVIOR_TREE__PLUGINS__ACTION__PICK_APPLES_ACTION_HPP_
+#define NAV2_BEHAVIOR_TREE__PLUGINS__ACTION__PICK_APPLES_ACTION_HPP_
+
+#include <string>
+
+#include "nav2_behavior_tree/bt_action_node.hpp"
+#include "nav2_msgs/action/wait.hpp"
+
+namespace nav2_behavior_tree {
+
+/**
+ * @brief A nav2_behavior_tree::BtActionNode class that wraps nav2_msgs::action::Wait when
+ * waiting for apples to be picked.
+ * @note This is an Asynchronous (long-running) node which may return a RUNNING state while executing.
+ *       It will re-initialize when halted.
+ */
+    class PickApplesAction : public BtActionNode<nav2_msgs::action::Wait> {
+        using Action = nav2_msgs::action::Wait;
+        using ActionResult = Action::Result;
+
+    public:
+        /**
+         * @brief A constructor for nav2_behavior_tree::PickApplesAction
+         * @param xml_tag_name Name for the XML tag for this node
+         * @param action_name Action name this node creates a client for
+         * @param conf BT node configuration
+         */
+        PickApplesAction(
+                const std::string &xml_tag_name,
+                const std::string &action_name,
+                const BT::NodeConfiguration &conf);
+
+        /**
+         * @brief Function to perform some user-defined operation on tick
+         */
+        void on_tick() override;
+
+        /**
+         * @brief Function to perform work in a BT Node when the action server times out
+         * Such as setting the error code ID status to timed out for action clients.
+         */
+        void on_timeout() override;
+
+        /**
+         * @brief Function to read parameters and initialize class variables
+         */
+        void initialize();
+
+        /**
+         * @brief Creates list of BT ports
+         * @return BT::PortsList Containing basic ports along with node-specific ports
+         */
+        static BT::PortsList providedPorts() {
+            return providedBasicPorts(
+                    {
+                            BT::InputPort<double>("timeout",
+                                                  120.0, "Max waiting time for result in seconds"),
+                            BT::OutputPort<ActionResult::_error_code_type>(
+                                    "error_code_id", "The wait behavior error code"),
+                            BT::OutputPort<std::string>(
+                                    "error_msg", "The wait behavior error msg"),
+                    });
+        }
+
+        /**
+         * @brief Function to perform some user-defined operation upon successful completion of the action
+         */
+        BT::NodeStatus on_success() override;
+
+        /**
+         * @brief Function to perform some user-defined operation upon abortion of the action
+         */
+        BT::NodeStatus on_aborted() override;
+
+        /**
+         * @brief Function to perform some user-defined operation upon cancellation of the action
+         */
+        BT::NodeStatus on_cancelled() override;
+    };
+
+}  // namespace nav2_behavior_tree
+
+#endif  // NAV2_BEHAVIOR_TREE__PLUGINS__ACTION__PICK_APPLES_ACTION_HPP_
