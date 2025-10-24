@@ -18,7 +18,9 @@
 #include <memory>
 #include <vector>
 #include <utility>
+#include <cmath>
 
+#include "tf2/utils.h"
 #include "nav2_regulated_pure_pursuit_controller/path_handler.hpp"
 #include "nav2_core/controller_exceptions.hpp"
 #include "nav2_util/node_utils.hpp"
@@ -48,32 +50,36 @@ double PathHandler::getCostmapMaxExtent() const
 nav_msgs::msg::Path PathHandler::transformGlobalPlan(
   const geometry_msgs::msg::PoseStamped & pose,
   double max_robot_pose_search_dist,
-  bool reject_unit_path)
+  bool reject_unit_path,
+  bool prune_plan)
 {
-  if (global_plan_.poses.empty()) {
+  // Use the inversion-aware path for transformation
+  auto & plan_to_use = global_plan_up_to_inversion_;
+
+  if (plan_to_use.poses.empty()) {
     throw nav2_core::InvalidPath("Received plan with zero length");
   }
 
-  if (reject_unit_path && global_plan_.poses.size() == 1) {
+  if (reject_unit_path && plan_to_use.poses.size() == 1) {
     throw nav2_core::InvalidPath("Received plan with length of one");
   }
 
   // let's get the pose of the robot in the frame of the plan
   geometry_msgs::msg::PoseStamped robot_pose;
-  if (!transformPose(global_plan_.header.frame_id, pose, robot_pose)) {
+  if (!transformPose(plan_to_use.header.frame_id, pose, robot_pose)) {
     throw nav2_core::ControllerTFError("Unable to transform robot pose into global plan's frame");
   }
 
   auto closest_pose_upper_bound =
     nav2_util::geometry_utils::first_after_integrated_distance(
-    global_plan_.poses.begin(), global_plan_.poses.end(), max_robot_pose_search_dist);
+    plan_to_use.poses.begin(), plan_to_use.poses.end(), max_robot_pose_search_dist);
 
   // First find the closest pose on the path to the robot
   // bounded by when the path turns around (if it does) so we don't get a pose from a later
   // portion of the path
   auto transformation_begin =
     nav2_util::geometry_utils::min_by(
-    global_plan_.poses.begin(), closest_pose_upper_bound,
+    plan_to_use.poses.begin(), closest_pose_upper_bound,
     [&robot_pose](const geometry_msgs::msg::PoseStamped & ps) {
       return euclidean_distance(robot_pose, ps);
     });
@@ -81,7 +87,7 @@ nav_msgs::msg::Path PathHandler::transformGlobalPlan(
   // Make sure we always have at least 2 points on the transformed plan and that we don't prune
   // the global plan below 2 points in order to have always enough point to interpolate the
   // end of path direction
-  if (global_plan_.poses.begin() != closest_pose_upper_bound && global_plan_.poses.size() > 1 &&
+  if (plan_to_use.poses.begin() != closest_pose_upper_bound && plan_to_use.poses.size() > 1 &&
     transformation_begin == std::prev(closest_pose_upper_bound))
   {
     transformation_begin = std::prev(std::prev(closest_pose_upper_bound));
@@ -90,7 +96,7 @@ nav_msgs::msg::Path PathHandler::transformGlobalPlan(
   // We'll discard points on the plan that are outside the local costmap
   const double max_costmap_extent = getCostmapMaxExtent();
   auto transformation_end = std::find_if(
-    transformation_begin, global_plan_.poses.end(),
+    transformation_begin, plan_to_use.poses.end(),
     [&](const auto & global_plan_pose) {
       return euclidean_distance(global_plan_pose, robot_pose) > max_costmap_extent;
     });
@@ -98,7 +104,7 @@ nav_msgs::msg::Path PathHandler::transformGlobalPlan(
   // Lambda to transform a PoseStamped from global frame to local
   auto transformGlobalPoseToLocal = [&](const auto & global_plan_pose) {
       geometry_msgs::msg::PoseStamped stamped_pose, transformed_pose;
-      stamped_pose.header.frame_id = global_plan_.header.frame_id;
+      stamped_pose.header.frame_id = plan_to_use.header.frame_id;
       stamped_pose.header.stamp = robot_pose.header.stamp;
       stamped_pose.pose = global_plan_pose.pose;
       if (!transformPose(costmap_ros_->getBaseFrameID(), stamped_pose, transformed_pose)) {
@@ -119,7 +125,9 @@ nav_msgs::msg::Path PathHandler::transformGlobalPlan(
 
   // Remove the portion of the global plan that we've already passed so we don't
   // process it on the next iteration (this is called path pruning)
-  global_plan_.poses.erase(begin(global_plan_.poses), transformation_begin);
+  if (prune_plan) {
+    plan_to_use.poses.erase(begin(plan_to_use.poses), transformation_begin);
+  }
 
   if (transformed_plan.poses.empty()) {
     throw nav2_core::InvalidPath("Resulting plan has 0 poses in it.");
@@ -145,6 +153,105 @@ bool PathHandler::transformPose(
   } catch (tf2::TransformException & ex) {
     RCLCPP_ERROR(logger_, "Exception in transformPose: %s", ex.what());
   }
+  return false;
+}
+
+nav_msgs::msg::Path::_poses_type::iterator
+PathHandler::findFirstPathInversion(nav_msgs::msg::Path & plan)
+{
+  // Iterate through path to find the first inversion (cusp point)
+  for (auto pose_it = plan.poses.begin(); pose_it != plan.poses.end() - 1; ++pose_it) {
+    auto next_pose_it = pose_it + 1;
+
+    // Calculate vectors between consecutive poses
+    double dx1 = pose_it->pose.position.x - (pose_it > plan.poses.begin() ?
+                 std::prev(pose_it)->pose.position.x : pose_it->pose.position.x);
+    double dy1 = pose_it->pose.position.y - (pose_it > plan.poses.begin() ?
+                 std::prev(pose_it)->pose.position.y : pose_it->pose.position.y);
+    double dx2 = next_pose_it->pose.position.x - pose_it->pose.position.x;
+    double dy2 = next_pose_it->pose.position.y - pose_it->pose.position.y;
+
+    // Check for direction reversal using dot product
+    double dot_product = dx1 * dx2 + dy1 * dy2;
+
+    if (dot_product < 0.0) {
+      return pose_it;
+    }
+
+    // Check for in-place rotation (overlapping points with different orientations)
+    if (std::hypot(dx2, dy2) < 1e-4) {
+      double yaw_curr = tf2::getYaw(pose_it->pose.orientation);
+      double yaw_next = tf2::getYaw(next_pose_it->pose.orientation);
+      if (std::abs(shortest_angular_distance(yaw_curr, yaw_next)) > 0.1) {
+        return pose_it;
+      }
+    }
+  }
+
+  return plan.poses.end();
+}
+
+void PathHandler::removePosesAfterFirstInversion(nav_msgs::msg::Path & plan)
+{
+  auto inversion_it = findFirstPathInversion(plan);
+  if (inversion_it != plan.poses.end()) {
+    plan.poses.erase(inversion_it + 1, plan.poses.end());
+  }
+}
+
+bool PathHandler::isWithinInversionTolerances(
+  const geometry_msgs::msg::PoseStamped & robot_pose,
+  const geometry_msgs::msg::PoseStamped & inversion_pose)
+{
+  // Check XY distance
+  double dx = robot_pose.pose.position.x - inversion_pose.pose.position.x;
+  double dy = robot_pose.pose.position.y - inversion_pose.pose.position.y;
+  double xy_dist = std::hypot(dx, dy);
+
+  if (xy_dist > inversion_xy_tolerance_) {
+    return false;
+  }
+
+  // Check yaw difference
+  double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
+  double inversion_yaw = tf2::getYaw(inversion_pose.pose.orientation);
+  double yaw_diff = std::abs(shortest_angular_distance(robot_yaw, inversion_yaw));
+
+  return yaw_diff <= inversion_yaw_tolerance_;
+}
+
+bool PathHandler::checkAndAdvanceToNextInversionSegment(
+  const geometry_msgs::msg::PoseStamped & robot_pose)
+{
+  // Prune global plan to remove poses up to the first inversion
+  removePosesAfterFirstInversion(global_plan_up_to_inversion_);
+
+  // Check if robot has reached the inversion point and should advance to next segment
+  if (!global_plan_up_to_inversion_.poses.empty() && !global_plan_.poses.empty()) {
+    // Transform the inversion pose to check if robot has reached it
+    geometry_msgs::msg::PoseStamped inversion_pose_global;
+    inversion_pose_global.header = global_plan_up_to_inversion_.header;
+    inversion_pose_global.pose = global_plan_up_to_inversion_.poses.back().pose;
+
+    geometry_msgs::msg::PoseStamped inversion_pose_map;
+    if (transformPose(robot_pose.header.frame_id, inversion_pose_global, inversion_pose_map)) {
+      if (isWithinInversionTolerances(robot_pose, inversion_pose_map)) {
+        // Robot has reached inversion point, advance to next segment
+        int current_inversion_idx = global_plan_up_to_inversion_.poses.size();
+        if (current_inversion_idx < static_cast<int>(global_plan_.poses.size())) {
+          // Create new path starting from after the inversion
+          global_plan_up_to_inversion_.poses.clear();
+          for (size_t i = current_inversion_idx; i < global_plan_.poses.size(); ++i) {
+            global_plan_up_to_inversion_.poses.push_back(global_plan_.poses[i]);
+          }
+          // Remove poses after the next inversion
+          removePosesAfterFirstInversion(global_plan_up_to_inversion_);
+          return true;
+        }
+      }
+    }
+  }
+
   return false;
 }
 
