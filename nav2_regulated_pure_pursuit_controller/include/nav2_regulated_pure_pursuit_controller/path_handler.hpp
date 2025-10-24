@@ -59,11 +59,13 @@ public:
    * @param pose pose to transform
    * @param max_robot_pose_search_dist Distance to search for matching nearest path point
    * @param reject_unit_path If true, fail if path has only one pose
+   * @param prune_plan If true, prune the global plan after transformation
    * @return Path in new frame
    */
   nav_msgs::msg::Path transformGlobalPlan(
     const geometry_msgs::msg::PoseStamped & pose,
-    double max_robot_pose_search_dist, bool reject_unit_path = false);
+    double max_robot_pose_search_dist, bool reject_unit_path = false,
+    bool prune_plan = true);
 
   /**
    * @brief Transform a pose to another frame.
@@ -77,11 +79,73 @@ public:
     const geometry_msgs::msg::PoseStamped & in_pose,
     geometry_msgs::msg::PoseStamped & out_pose) const;
 
-  void setPlan(const nav_msgs::msg::Path & path) {global_plan_ = path;}
+  void setPlan(const nav_msgs::msg::Path & path)
+  {
+    global_plan_ = path;
+    global_plan_up_to_inversion_ = path;
+  }
 
   nav_msgs::msg::Path getPlan() {return global_plan_;}
 
+  /**
+   * @brief Set inversion tolerance parameters
+   * @param xy_tolerance XY distance tolerance in meters
+   * @param yaw_tolerance Yaw angle tolerance in radians
+   */
+  void setInversionTolerances(double xy_tolerance, double yaw_tolerance)
+  {
+    inversion_xy_tolerance_ = xy_tolerance;
+    inversion_yaw_tolerance_ = yaw_tolerance;
+  }
+
+  /**
+   * @brief Check if robot reached inversion point and advance to next path segment
+   * This manages the global_plan_up_to_inversion_ by pruning at inversions and
+   * advancing to the next segment when the robot reaches an inversion point.
+   * @param robot_pose Current robot pose in map frame
+   * @return true if a new path segment was activated
+   */
+  bool checkAndAdvanceToNextInversionSegment(const geometry_msgs::msg::PoseStamped & robot_pose);
+
 protected:
+  /**
+   * @brief Calculates the shortest angular distance between two angles
+   * @param from Starting angle in radians
+   * @param to Target angle in radians
+   * @return Shortest angular distance in radians
+   */
+  static inline double shortest_angular_distance(double from, double to)
+  {
+    double delta = to - from;
+    // Normalize to [-pi, pi]
+    while (delta > M_PI) {delta -= 2.0 * M_PI;}
+    while (delta < -M_PI) {delta += 2.0 * M_PI;}
+    return delta;
+  }
+
+  /**
+   * @brief Find the first path inversion (cusp) point
+   * @param plan Path to search for inversion
+   * @return Iterator to the first inversion point, or end() if none found
+   */
+  static nav_msgs::msg::Path::_poses_type::iterator findFirstPathInversion(
+    nav_msgs::msg::Path & plan);
+
+  /**
+   * @brief Remove poses after the first inversion in the path
+   * @param plan Path to prune
+   */
+  static void removePosesAfterFirstInversion(nav_msgs::msg::Path & plan);
+
+  /**
+   * @brief Check if robot is within tolerance of inversion point
+   * @param robot_pose Current robot pose
+   * @param inversion_pose Inversion point pose
+   * @return true if robot is within tolerances
+   */
+  bool isWithinInversionTolerances(
+    const geometry_msgs::msg::PoseStamped & robot_pose,
+    const geometry_msgs::msg::PoseStamped & inversion_pose);
   /**
    * Get the greatest extent of the costmap in meters from the center.
    * @return max of distance from center in meters to edge of costmap
@@ -93,6 +157,9 @@ protected:
   std::shared_ptr<tf2_ros::Buffer> tf_;
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros_;
   nav_msgs::msg::Path global_plan_;
+  nav_msgs::msg::Path global_plan_up_to_inversion_;
+  double inversion_xy_tolerance_{0.2};
+  double inversion_yaw_tolerance_{0.4};
 };
 
 }  // namespace nav2_regulated_pure_pursuit_controller

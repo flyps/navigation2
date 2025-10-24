@@ -72,6 +72,19 @@ void RegulatedPurePursuitController::configure(
   node->get_parameter("controller_frequency", control_frequency);
   control_duration_ = 1.0 / control_frequency;
 
+  // Inversion tolerance parameters
+  nav2_util::declare_parameter_if_not_declared(
+    node, plugin_name_ + ".inversion_xy_tolerance", rclcpp::ParameterValue(0.2));
+  nav2_util::declare_parameter_if_not_declared(
+    node, plugin_name_ + ".inversion_yaw_tolerance", rclcpp::ParameterValue(0.4));
+
+  double inversion_xy_tolerance, inversion_yaw_tolerance;
+  node->get_parameter(plugin_name_ + ".inversion_xy_tolerance", inversion_xy_tolerance);
+  node->get_parameter(plugin_name_ + ".inversion_yaw_tolerance", inversion_yaw_tolerance);
+
+  // Set inversion tolerances in path handler
+  path_handler_->setInversionTolerances(inversion_xy_tolerance, inversion_yaw_tolerance);
+
   global_path_pub_ = node->create_publisher<nav_msgs::msg::Path>("received_global_plan", 1);
   carrot_pub_ = node->create_publisher<geometry_msgs::msg::PointStamped>("lookahead_point", 1);
   curvature_carrot_pub_ = node->create_publisher<geometry_msgs::msg::PointStamped>(
@@ -179,6 +192,9 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
   } else {
     goal_dist_tol_ = pose_tolerance.position.x;
   }
+
+  // Check if robot reached inversion point and advance to next path segment
+  path_handler_->checkAndAdvanceToNextInversionSegment(pose);
 
   // Transform path to robot base frame
   auto transformed_plan = path_handler_->transformGlobalPlan(
