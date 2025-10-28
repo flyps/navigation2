@@ -61,6 +61,47 @@ Mixing the proximity and curvature regulated linear velocities with the time-sca
 
 Note: The maximum allowed time to collision is thresholded by the lookahead point, starting in Humble. This is such that collision checking isn't significantly overshooting the path, which can cause issues in constrained environments. For example, if there were a straight-line path going towards a wall that then turned left, if this parameter was set to high, then it would detect a collision past the point of actual robot intended motion. Thusly, if a robot is moving fast, selecting further out lookahead points is not only a matter of behavioral stability for Pure Pursuit, but also gives a robot further predictive collision detection capabilities. The max allowable time parameter is still in place for slow commands, as described in detail above.
 
+### Cusp Point (Path Inversion) Handling
+
+The Regulated Pure Pursuit controller includes support for paths with **cusp points** (also known as path inversions), where the robot must reverse direction or perform in-place rotations. This is critical for applications like:
+
+- Agricultural robots navigating between crop rows with reversing maneuvers
+- Warehouse robots performing multi-point pickups with direction changes
+- Ackermann-steered vehicles executing complex parking maneuvers
+
+#### How It Works
+
+When a path contains multiple segments separated by cusp points (direction reversals), the controller:
+
+1. **Segments the path** at inversion points to prevent following conflicting directions simultaneously
+2. **Tracks the current segment** separately from the full global plan
+3. **Monitors robot progress** toward each inversion point using configurable XY and yaw tolerances
+4. **Advances to the next segment** automatically when the robot reaches an inversion point
+5. **Maintains correct indexing** across multiple inversions using explicit segment position tracking
+
+#### Inversion Detection
+
+A cusp point is detected when:
+- **Direction reversal**: Dot product of consecutive path segment vectors is negative (< 0.0)
+- **In-place rotation**: Path poses are nearly coincident (< 0.1mm apart) but orientations differ by > 0.1 radians
+
+#### Path Processing
+
+The controller maintains two path representations:
+- `global_plan_`: The complete original path with all segments
+- `global_plan_up_to_inversion_`: Working path truncated at the next inversion point
+
+As the robot reaches each inversion point (within configured tolerances), the controller automatically loads the next segment.
+
+#### Transform Handling
+
+The controller uses `rclcpp::Time(0)` for TF lookups when transforming path poses, which requests the latest available transform. This prevents "extrapolation into the past" errors when:
+- The planner is slow and produces paths with old timestamps
+- There are delays in path processing
+- The TF buffer has limited history
+
+This is safe because path geometry doesn't change over time, and real-time control requires current transforms.
+
 ## Configuration
 
 | Parameter | Description |
@@ -92,6 +133,8 @@ Note: The maximum allowed time to collision is thresholded by the lookahead poin
 | `max_robot_pose_search_dist` | Maximum integrated distance along the path to bound the search for the closest pose to the robot. This is set by default to the maximum costmap extent, so it shouldn't be set manually unless there are loops within the local costmap. |
 | `interpolate_curvature_after_goal` | Needs use_fixed_curvature_lookahead to be true. Interpolate a carrot after the goal dedicated to the curvature calculation (to avoid oscillations at the end of the path) |
 | `min_distance_to_obstacle` | The shortest distance at which the robot is allowed to be from an obstacle along its trajectory. Set <= 0.0 to disable. It is limited to maximum distance of lookahead distance selected. |
+| `inversion_xy_tolerance` | XY distance tolerance (meters) for determining if robot has reached a cusp point. Default: 0.2 |
+| `inversion_yaw_tolerance` | Yaw angle tolerance (radians) for determining if robot has reached a cusp point. Default: 0.4 |
 
 Example fully-described XML with default parameter values:
 
@@ -143,6 +186,8 @@ controller_server:
       cost_scaling_dist: 0.3
       cost_scaling_gain: 1.0
       inflation_cost_scaling_factor: 3.0
+      inversion_xy_tolerance: 0.2
+      inversion_yaw_tolerance: 0.4
 ```
 
 ## Topics
@@ -165,3 +210,21 @@ To tune to get Pure Pursuit behaviors, set all boolean parameters to false and m
 Currently, there is no rotate to goal behaviors, so it is expected that the path approach orientations are the orientations of the goal or the goal checker has been set with a generous `min_theta_velocity_threshold`. Implementations for rotating to goal heading are on the way.
 
 The choice of lookahead distances are highly dependent on robot size, responsiveness, controller update rate, and speed. Please make sure to tune this for your platform, although the `regulated` features do largely make heavy tuning of this value unnecessary. If you see wiggling, increase the distance or scale. If it's not converging as fast to the path as you'd like, decrease it.
+
+### Cusp Point / Reversing Paths
+
+When using paths with cusp points (direction reversals):
+
+- **Set `allow_reversing: true`** to enable backward motion support
+- **Tune inversion tolerances** based on your robot's size and accuracy:
+  - Larger `inversion_xy_tolerance` (e.g., 0.3-0.5m) for large/imprecise robots
+  - Smaller `inversion_xy_tolerance` (e.g., 0.1-0.2m) for small/precise robots
+  - Adjust `inversion_yaw_tolerance` based on required orientation precision at cusp points
+- **Use kinematically feasible planners** like Smac Planner Hybrid-A* for generating reversing paths
+- **Consider path direction consistency**: The planner should mark direction changes explicitly in the path
+
+The controller will automatically:
+- Follow each path segment up to the cusp point
+- Stop/slow at inversion points (controlled by goal checker tolerances)
+- Advance to the next segment when within tolerance
+- Handle multiple consecutive cusp points correctly
