@@ -83,6 +83,9 @@ public:
   {
     global_plan_ = path;
     global_plan_up_to_inversion_ = path;
+    current_segment_start_idx_ = 0;
+    removePosesAfterFirstInversion(global_plan_up_to_inversion_);
+    current_segment_length_ = global_plan_up_to_inversion_.poses.size();
   }
 
   nav_msgs::msg::Path getPlan() {return global_plan_;}
@@ -160,6 +163,8 @@ protected:
   nav_msgs::msg::Path global_plan_up_to_inversion_;
   double inversion_xy_tolerance_{0.2};
   double inversion_yaw_tolerance_{0.4};
+  size_t current_segment_start_idx_{0};
+  size_t current_segment_length_{0};
 };
 
 }  // namespace nav2_regulated_pure_pursuit_controller
