@@ -105,7 +105,7 @@ nav_msgs::msg::Path PathHandler::transformGlobalPlan(
   auto transformGlobalPoseToLocal = [&](const auto & global_plan_pose) {
       geometry_msgs::msg::PoseStamped stamped_pose, transformed_pose;
       stamped_pose.header.frame_id = plan_to_use.header.frame_id;
-      stamped_pose.header.stamp = robot_pose.header.stamp;
+      stamped_pose.header.stamp = rclcpp::Time(0);  // Use latest available transform
       stamped_pose.pose = global_plan_pose.pose;
       if (!transformPose(costmap_ros_->getBaseFrameID(), stamped_pose, transformed_pose)) {
         throw nav2_core::ControllerTFError("Unable to transform plan pose into local frame");
@@ -231,21 +231,31 @@ bool PathHandler::checkAndAdvanceToNextInversionSegment(
     // Transform the inversion pose to check if robot has reached it
     geometry_msgs::msg::PoseStamped inversion_pose_global;
     inversion_pose_global.header = global_plan_up_to_inversion_.header;
+    inversion_pose_global.header.stamp = rclcpp::Time(0);  // Use latest available transform
     inversion_pose_global.pose = global_plan_up_to_inversion_.poses.back().pose;
 
     geometry_msgs::msg::PoseStamped inversion_pose_map;
     if (transformPose(robot_pose.header.frame_id, inversion_pose_global, inversion_pose_map)) {
       if (isWithinInversionTolerances(robot_pose, inversion_pose_map)) {
         // Robot has reached inversion point, advance to next segment
-        int current_inversion_idx = global_plan_up_to_inversion_.poses.size();
-        if (current_inversion_idx < static_cast<int>(global_plan_.poses.size())) {
+        size_t next_segment_start = current_segment_start_idx_ + current_segment_length_;
+
+        if (next_segment_start < global_plan_.poses.size()) {
+          // Update tracking for new segment
+          current_segment_start_idx_ = next_segment_start;
+
           // Create new path starting from after the inversion
           global_plan_up_to_inversion_.poses.clear();
-          for (size_t i = current_inversion_idx; i < global_plan_.poses.size(); ++i) {
+          for (size_t i = next_segment_start; i < global_plan_.poses.size(); ++i) {
             global_plan_up_to_inversion_.poses.push_back(global_plan_.poses[i]);
           }
+
           // Remove poses after the next inversion
           removePosesAfterFirstInversion(global_plan_up_to_inversion_);
+
+          // Store new segment length
+          current_segment_length_ = global_plan_up_to_inversion_.poses.size();
+
           return true;
         }
       }
