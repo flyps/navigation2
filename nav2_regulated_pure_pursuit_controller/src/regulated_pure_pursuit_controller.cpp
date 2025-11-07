@@ -244,7 +244,13 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
     x_vel_sign = carrot_pose.pose.position.x >= 0.0 ? 1.0 : -1.0;
   }
 
+  RCLCPP_INFO_THROTTLE(logger_, *(node_.lock()->get_clock()), 333,
+    "lookahead_point: x=%.4f, y=%.4f, lookahead_dist=%.4f, x_vel_sign=%.1f",
+    carrot_pose.pose.position.x, carrot_pose.pose.position.y, lookahead_dist, x_vel_sign);
+
   linear_vel = params_->desired_linear_vel;
+  double linear_vel_before_constraints = linear_vel;
+  double angular_vel_before_constraints = linear_vel * regulation_curvature;
 
   // Make sure we're in compliance with basic constraints
   // For shouldRotateToPath, using x_vel_sign in order to support allow_reversing
@@ -285,6 +291,11 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
 
     // Apply curvature to angular velocity after constraining linear velocity
     angular_vel = linear_vel * regulation_curvature;
+
+    RCLCPP_INFO_THROTTLE(logger_, *(node_.lock()->get_clock()), 1000,
+      "curvature: %.4f, linear_vel: %.4f->%.4f, angular_vel: %.4f->%.4f",
+      regulation_curvature, linear_vel_before_constraints, linear_vel,
+      angular_vel_before_constraints, angular_vel);
   }
 
   // Collision checking on this velocity heading
