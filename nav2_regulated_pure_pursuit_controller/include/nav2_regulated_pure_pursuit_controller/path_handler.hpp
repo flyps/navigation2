@@ -81,11 +81,14 @@ public:
 
   void setPlan(const nav_msgs::msg::Path & path)
   {
+    RCLCPP_INFO(logger_, "setPlan called with %zu poses", path.poses.size());
     global_plan_ = path;
     global_plan_up_to_inversion_ = path;
     current_segment_start_idx_ = 0;
     removePosesAfterFirstInversion(global_plan_up_to_inversion_);
     current_segment_length_ = global_plan_up_to_inversion_.poses.size();
+    RCLCPP_INFO(logger_, "setPlan: segment_length=%zu (after removing poses after first inversion)",
+      current_segment_length_);
   }
 
   nav_msgs::msg::Path getPlan() {return global_plan_;}
@@ -106,9 +109,12 @@ public:
    * This manages the global_plan_up_to_inversion_ by pruning at inversions and
    * advancing to the next segment when the robot reaches an inversion point.
    * @param robot_pose Current robot pose in map frame
+   * @param transformed_plan Optional transformed plan in robot frame to check if robot passed the end
    * @return true if a new path segment was activated
    */
-  bool checkAndAdvanceToNextInversionSegment(const geometry_msgs::msg::PoseStamped & robot_pose);
+  bool checkAndAdvanceToNextInversionSegment(
+    const geometry_msgs::msg::PoseStamped & robot_pose,
+    const nav_msgs::msg::Path * transformed_plan = nullptr);
 
 protected:
   /**
