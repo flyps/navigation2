@@ -221,14 +221,17 @@ bool PathHandler::isWithinInversionTolerances(
 }
 
 bool PathHandler::checkAndAdvanceToNextInversionSegment(
-  const geometry_msgs::msg::PoseStamped & robot_pose)
+  const geometry_msgs::msg::PoseStamped & robot_pose,
+  const nav_msgs::msg::Path * transformed_plan)
 {
   // Prune global plan to remove poses up to the first inversion
   removePosesAfterFirstInversion(global_plan_up_to_inversion_);
 
   // Check if robot has reached the inversion point and should advance to next segment
   if (!global_plan_up_to_inversion_.poses.empty() && !global_plan_.poses.empty()) {
-    // Transform the inversion pose to check if robot has reached it
+    bool should_advance = false;
+
+    // Check 1: Robot reached inversion point within tolerance
     geometry_msgs::msg::PoseStamped inversion_pose_global;
     inversion_pose_global.header = global_plan_up_to_inversion_.header;
     inversion_pose_global.header.stamp = rclcpp::Time(0);  // Use latest available transform
@@ -237,27 +240,48 @@ bool PathHandler::checkAndAdvanceToNextInversionSegment(
     geometry_msgs::msg::PoseStamped inversion_pose_map;
     if (transformPose(robot_pose.header.frame_id, inversion_pose_global, inversion_pose_map)) {
       if (isWithinInversionTolerances(robot_pose, inversion_pose_map)) {
-        // Robot has reached inversion point, advance to next segment
-        size_t next_segment_start = current_segment_start_idx_ + current_segment_length_;
+        should_advance = true;
+        RCLCPP_INFO(logger_, "Advancing segment: robot within inversion tolerances");
+      }
+    }
 
-        if (next_segment_start < global_plan_.poses.size()) {
-          // Update tracking for new segment
-          current_segment_start_idx_ = next_segment_start;
+    // Check 2: Robot is very close to the last path point (nearly aligned laterally)
+    // This indicates the robot has reached the end point and would start oscillating
+    if (!should_advance && transformed_plan != nullptr && !transformed_plan->poses.empty()) {
+      // Check if the last point is very close laterally (small x distance in robot frame)
+      double last_point_x = transformed_plan->poses.back().pose.position.x;
+      double lateral_tolerance = inversion_xy_tolerance_ / std::sqrt(2.0);
+      if (std::abs(last_point_x) < lateral_tolerance) {
+        should_advance = true;
+        RCLCPP_INFO(logger_, "Advancing segment: robot near end point (x=%.3f, tolerance=%.3f)",
+          last_point_x, lateral_tolerance);
+      }
+    }
 
-          // Create new path starting from after the inversion
-          global_plan_up_to_inversion_.poses.clear();
-          for (size_t i = next_segment_start; i < global_plan_.poses.size(); ++i) {
-            global_plan_up_to_inversion_.poses.push_back(global_plan_.poses[i]);
-          }
+    if (should_advance) {
+      // Robot has reached inversion point, advance to next segment
+      size_t next_segment_start = current_segment_start_idx_ + current_segment_length_;
 
-          // Remove poses after the next inversion
-          removePosesAfterFirstInversion(global_plan_up_to_inversion_);
+      if (next_segment_start < global_plan_.poses.size()) {
+        // Update tracking for new segment
+        current_segment_start_idx_ = next_segment_start;
 
-          // Store new segment length
-          current_segment_length_ = global_plan_up_to_inversion_.poses.size();
-
-          return true;
+        // Create new path starting from after the inversion
+        global_plan_up_to_inversion_.poses.clear();
+        for (size_t i = next_segment_start; i < global_plan_.poses.size(); ++i) {
+          global_plan_up_to_inversion_.poses.push_back(global_plan_.poses[i]);
         }
+
+        // Remove poses after the next inversion
+        removePosesAfterFirstInversion(global_plan_up_to_inversion_);
+
+        // Store new segment length
+        current_segment_length_ = global_plan_up_to_inversion_.poses.size();
+
+        RCLCPP_INFO(logger_, "Advanced to segment starting at index %zu with %zu poses",
+          current_segment_start_idx_, current_segment_length_);
+
+        return true;
       }
     }
   }

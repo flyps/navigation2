@@ -193,12 +193,20 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
     goal_dist_tol_ = pose_tolerance.position.x;
   }
 
-  // Check if robot reached inversion point and advance to next path segment
-  path_handler_->checkAndAdvanceToNextInversionSegment(pose);
-
   // Transform path to robot base frame
   auto transformed_plan = path_handler_->transformGlobalPlan(
     pose, params_->max_robot_pose_search_dist, params_->interpolate_curvature_after_goal);
+
+  // Check if robot reached inversion point and advance to next path segment
+  // Pass transformed plan to also check if robot moved past the end point
+  if (path_handler_->checkAndAdvanceToNextInversionSegment(pose, &transformed_plan)) {
+    RCLCPP_INFO(logger_, "Advanced to next path segment");
+    // Re-transform the plan after advancing to the next segment
+    transformed_plan = path_handler_->transformGlobalPlan(
+      pose, params_->max_robot_pose_search_dist, params_->interpolate_curvature_after_goal);
+    global_path_pub_->publish(transformed_plan);
+  }
+
   global_path_pub_->publish(transformed_plan);
 
   // Find look ahead distance and point on path and publish
@@ -244,7 +252,7 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
     x_vel_sign = carrot_pose.pose.position.x >= 0.0 ? 1.0 : -1.0;
   }
 
-  RCLCPP_INFO_THROTTLE(logger_, *(node_.lock()->get_clock()), 333,
+  RCLCPP_INFO_THROTTLE(logger_, *(node_.lock()->get_clock()), 10000,
     "lookahead_point: x=%.4f, y=%.4f, lookahead_dist=%.4f, x_vel_sign=%.1f",
     carrot_pose.pose.position.x, carrot_pose.pose.position.y, lookahead_dist, x_vel_sign);
 
@@ -292,10 +300,10 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
     // Apply curvature to angular velocity after constraining linear velocity
     angular_vel = linear_vel * regulation_curvature;
 
-    RCLCPP_INFO_THROTTLE(logger_, *(node_.lock()->get_clock()), 1000,
+    RCLCPP_INFO_THROTTLE(logger_, *(node_.lock()->get_clock()), 10000,
       "curvature: %.4f, linear_vel: %.4f->%.4f, angular_vel: %.4f->%.4f",
-      regulation_curvature, linear_vel_before_constraints, linear_vel,
-      angular_vel_before_constraints, angular_vel);
+      regulation_curvature, linear_vel_before_constraints * x_vel_sign, linear_vel,
+      angular_vel_before_constraints * x_vel_sign, angular_vel);
   }
 
   // Collision checking on this velocity heading
