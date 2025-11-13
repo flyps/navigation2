@@ -199,29 +199,7 @@ void PathHandler::removePosesAfterFirstInversion(nav_msgs::msg::Path & plan)
   }
 }
 
-bool PathHandler::isWithinInversionTolerances(
-  const geometry_msgs::msg::PoseStamped & robot_pose,
-  const geometry_msgs::msg::PoseStamped & inversion_pose)
-{
-  // Check XY distance
-  double dx = robot_pose.pose.position.x - inversion_pose.pose.position.x;
-  double dy = robot_pose.pose.position.y - inversion_pose.pose.position.y;
-  double xy_dist = std::hypot(dx, dy);
-
-  if (xy_dist > inversion_xy_tolerance_) {
-    return false;
-  }
-
-  // Check yaw difference
-  double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
-  double inversion_yaw = tf2::getYaw(inversion_pose.pose.orientation);
-  double yaw_diff = std::abs(shortest_angular_distance(robot_yaw, inversion_yaw));
-
-  return yaw_diff <= inversion_yaw_tolerance_;
-}
-
 bool PathHandler::checkAndAdvanceToNextInversionSegment(
-  const geometry_msgs::msg::PoseStamped & robot_pose,
   const nav_msgs::msg::Path * transformed_plan)
 {
   // Prune global plan to remove poses up to the first inversion
@@ -231,31 +209,27 @@ bool PathHandler::checkAndAdvanceToNextInversionSegment(
   if (!global_plan_up_to_inversion_.poses.empty() && !global_plan_.poses.empty()) {
     bool should_advance = false;
 
-    // Check 1: Robot reached inversion point within tolerance
-    geometry_msgs::msg::PoseStamped inversion_pose_global;
-    inversion_pose_global.header = global_plan_up_to_inversion_.header;
-    inversion_pose_global.header.stamp = rclcpp::Time(0);  // Use latest available transform
-    inversion_pose_global.pose = global_plan_up_to_inversion_.poses.back().pose;
-
-    geometry_msgs::msg::PoseStamped inversion_pose_map;
-    if (transformPose(robot_pose.header.frame_id, inversion_pose_global, inversion_pose_map)) {
-      if (isWithinInversionTolerances(robot_pose, inversion_pose_map)) {
-        should_advance = true;
-        RCLCPP_INFO(logger_, "Advancing segment: robot within inversion tolerances");
-      }
-    }
-
-    // Check 2: Robot is very close to the last path point (nearly aligned laterally)
-    // This indicates the robot has reached the end point and would start oscillating
-    if (!should_advance && transformed_plan != nullptr && !transformed_plan->poses.empty()) {
-      // Check if the last point is very close laterally (small x distance in robot frame)
+    // Check: Robot passed the last path point (sign change or became zero)
+    // This indicates the robot has reached the end point and should advance
+    if (transformed_plan != nullptr && !transformed_plan->poses.empty()) {
       double last_point_x = transformed_plan->poses.back().pose.position.x;
-      double lateral_tolerance = inversion_xy_tolerance_ / std::sqrt(2.0);
-      if (std::abs(last_point_x) < lateral_tolerance) {
-        should_advance = true;
-        RCLCPP_INFO(logger_, "Advancing segment: robot near end point (x=%.3f, tolerance=%.3f)",
-          last_point_x, lateral_tolerance);
+
+      // Check if we have a previous value and if sign changed or became zero
+      if (!std::isnan(prev_last_point_x_)) {
+        bool sign_changed = (prev_last_point_x_ > 0 && last_point_x <= 0) ||
+                           (prev_last_point_x_ < 0 && last_point_x >= 0);
+        bool became_zero = (last_point_x == 0.0);
+
+        if (sign_changed || became_zero) {
+          should_advance = true;
+          RCLCPP_INFO(logger_,
+            "Advancing segment: last_point_x %.3f -> %.3f (sign_changed=%d, became_zero=%d)",
+            prev_last_point_x_, last_point_x, sign_changed, became_zero);
+        }
       }
+
+      // Update previous value for next iteration
+      prev_last_point_x_ = last_point_x;
     }
 
     if (should_advance) {
@@ -277,6 +251,9 @@ bool PathHandler::checkAndAdvanceToNextInversionSegment(
 
         // Store new segment length
         current_segment_length_ = global_plan_up_to_inversion_.poses.size();
+
+        // Reset tracking for new segment
+        prev_last_point_x_ = std::numeric_limits<double>::quiet_NaN();
 
         RCLCPP_INFO(logger_, "Advanced to segment starting at index %zu with %zu poses",
           current_segment_start_idx_, current_segment_length_);

@@ -75,8 +75,9 @@ When a path contains multiple segments separated by cusp points (direction rever
 
 1. **Segments the path** at inversion points to prevent following conflicting directions simultaneously
 2. **Tracks the current segment** separately from the full global plan
-3. **Monitors robot progress** toward each inversion point using configurable XY and yaw tolerances
-4. **Advances to the next segment** automatically when the robot reaches an inversion point
+3. **Monitors robot progress** toward each inversion point by detecting when the robot passes the segment endpoint
+4. **Advances to the next segment** automatically when the robot crosses the endpoint
+                                    (sign change detection of x position of cusp point in robot frame)
 5. **Maintains correct indexing** across multiple inversions using explicit segment position tracking
 
 #### Inversion Detection
@@ -91,7 +92,16 @@ The controller maintains two path representations:
 - `global_plan_`: The complete original path with all segments
 - `global_plan_up_to_inversion_`: Working path truncated at the next inversion point
 
-As the robot reaches each inversion point (within configured tolerances), the controller automatically loads the next segment.
+#### Segment Advancement
+
+The controller automatically advances to the next segment when it detects that the robot has passed the current segment's endpoint. Detection works by:
+
+1. **Transforming** the path endpoint to the robot's frame each control cycle
+2. **Tracking** the x-coordinate (forward/backward) of the endpoint in robot frame
+3. **Detecting sign changes**: When the endpoint's x-coordinate changes from positive to negative (or vice versa), the robot has passed it
+4. **Advancing** to the next segment and resetting the tracking for the new segment
+
+This sign-change detection is robust because it directly measures when the robot crosses the endpoint, regardless of path following accuracy or robot size. No tuning parameters are required.
 
 #### Transform Handling
 
@@ -133,8 +143,6 @@ This is safe because path geometry doesn't change over time, and real-time contr
 | `max_robot_pose_search_dist` | Maximum integrated distance along the path to bound the search for the closest pose to the robot. This is set by default to the maximum costmap extent, so it shouldn't be set manually unless there are loops within the local costmap. |
 | `interpolate_curvature_after_goal` | Needs use_fixed_curvature_lookahead to be true. Interpolate a carrot after the goal dedicated to the curvature calculation (to avoid oscillations at the end of the path) |
 | `min_distance_to_obstacle` | The shortest distance at which the robot is allowed to be from an obstacle along its trajectory. Set <= 0.0 to disable. It is limited to maximum distance of lookahead distance selected. |
-| `inversion_xy_tolerance` | XY distance tolerance (meters) for determining if robot has reached a cusp point. Default: 0.2 |
-| `inversion_yaw_tolerance` | Yaw angle tolerance (radians) for determining if robot has reached a cusp point. Default: 0.4 |
 
 Example fully-described XML with default parameter values:
 
@@ -186,8 +194,6 @@ controller_server:
       cost_scaling_dist: 0.3
       cost_scaling_gain: 1.0
       inflation_cost_scaling_factor: 3.0
-      inversion_xy_tolerance: 0.2
-      inversion_yaw_tolerance: 0.4
 ```
 
 ## Topics
@@ -216,15 +222,13 @@ The choice of lookahead distances are highly dependent on robot size, responsive
 When using paths with cusp points (direction reversals):
 
 - **Set `allow_reversing: true`** to enable backward motion support
-- **Tune inversion tolerances** based on your robot's size and accuracy:
-  - Larger `inversion_xy_tolerance` (e.g., 0.3-0.5m) for large/imprecise robots
-  - Smaller `inversion_xy_tolerance` (e.g., 0.1-0.2m) for small/precise robots
-  - Adjust `inversion_yaw_tolerance` based on required orientation precision at cusp points
 - **Use kinematically feasible planners** like Smac Planner Hybrid-A* for generating reversing paths
 - **Consider path direction consistency**: The planner should mark direction changes explicitly in the path
 
 The controller will automatically:
 - Follow each path segment up to the cusp point
-- Stop/slow at inversion points (controlled by goal checker tolerances)
-- Advance to the next segment when within tolerance
+- Detect when the robot passes each segment endpoint using sign-change detection (no tuning required)
+- Advance to the next segment automatically
 - Handle multiple consecutive cusp points correctly
+
+**Note**: Segment advancement is handled automatically through geometric detection of when the robot crosses each segment endpoint. No tolerance parameters need to be tuned.
