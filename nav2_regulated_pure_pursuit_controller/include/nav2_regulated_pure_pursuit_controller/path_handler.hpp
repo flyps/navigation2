@@ -20,6 +20,8 @@
 #include <memory>
 #include <algorithm>
 #include <mutex>
+#include <limits>
+#include <cmath>
 
 #include "rclcpp/rclcpp.hpp"
 #include "nav2_costmap_2d/costmap_2d_ros.hpp"
@@ -87,22 +89,12 @@ public:
     current_segment_start_idx_ = 0;
     removePosesAfterFirstInversion(global_plan_up_to_inversion_);
     current_segment_length_ = global_plan_up_to_inversion_.poses.size();
+    prev_last_point_x_ = std::numeric_limits<double>::quiet_NaN();
     RCLCPP_INFO(logger_, "setPlan: segment_length=%zu (after removing poses after first inversion)",
       current_segment_length_);
   }
 
   nav_msgs::msg::Path getPlan() {return global_plan_;}
-
-  /**
-   * @brief Set inversion tolerance parameters
-   * @param xy_tolerance XY distance tolerance in meters
-   * @param yaw_tolerance Yaw angle tolerance in radians
-   */
-  void setInversionTolerances(double xy_tolerance, double yaw_tolerance)
-  {
-    inversion_xy_tolerance_ = xy_tolerance;
-    inversion_yaw_tolerance_ = yaw_tolerance;
-  }
 
   /**
    * @brief Check if robot reached inversion point and advance to next path segment
@@ -113,7 +105,6 @@ public:
    * @return true if a new path segment was activated
    */
   bool checkAndAdvanceToNextInversionSegment(
-    const geometry_msgs::msg::PoseStamped & robot_pose,
     const nav_msgs::msg::Path * transformed_plan = nullptr);
 
 protected:
@@ -147,15 +138,6 @@ protected:
   static void removePosesAfterFirstInversion(nav_msgs::msg::Path & plan);
 
   /**
-   * @brief Check if robot is within tolerance of inversion point
-   * @param robot_pose Current robot pose
-   * @param inversion_pose Inversion point pose
-   * @return true if robot is within tolerances
-   */
-  bool isWithinInversionTolerances(
-    const geometry_msgs::msg::PoseStamped & robot_pose,
-    const geometry_msgs::msg::PoseStamped & inversion_pose);
-  /**
    * Get the greatest extent of the costmap in meters from the center.
    * @return max of distance from center in meters to edge of costmap
    */
@@ -167,10 +149,9 @@ protected:
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros_;
   nav_msgs::msg::Path global_plan_;
   nav_msgs::msg::Path global_plan_up_to_inversion_;
-  double inversion_xy_tolerance_{0.2};
-  double inversion_yaw_tolerance_{0.4};
   size_t current_segment_start_idx_{0};
   size_t current_segment_length_{0};
+  double prev_last_point_x_{std::numeric_limits<double>::quiet_NaN()};
 };
 
 }  // namespace nav2_regulated_pure_pursuit_controller
