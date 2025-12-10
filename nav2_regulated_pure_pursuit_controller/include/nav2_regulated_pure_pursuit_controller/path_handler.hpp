@@ -102,10 +102,12 @@ public:
    * advancing to the next segment when the robot reaches an inversion point.
    * @param robot_pose Current robot pose in map frame
    * @param transformed_plan Optional transformed plan in robot frame to check if robot passed the end
+   * @param lookahead_dist Lookahead distance to use as proximity threshold for segment advancement
    * @return true if a new path segment was activated
    */
   bool checkAndAdvanceToNextInversionSegment(
-    const nav_msgs::msg::Path * transformed_plan = nullptr);
+    const nav_msgs::msg::Path * transformed_plan = nullptr,
+    double lookahead_dist = 0.6);
 
 protected:
   /**
