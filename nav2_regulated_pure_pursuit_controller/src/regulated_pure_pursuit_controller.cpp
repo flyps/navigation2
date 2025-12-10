@@ -180,13 +180,16 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
     goal_dist_tol_ = pose_tolerance.position.x;
   }
 
+  // Calculate lookahead distance for use in segment advancement check
+  double lookahead_dist = getLookAheadDistance(speed);
+
   // Transform path to robot base frame
   auto transformed_plan = path_handler_->transformGlobalPlan(
     pose, params_->max_robot_pose_search_dist, params_->interpolate_curvature_after_goal);
 
   // Check if robot reached inversion point and advance to next path segment
-  // Pass transformed plan to also check if robot moved past the end point
-  if (path_handler_->checkAndAdvanceToNextInversionSegment(&transformed_plan)) {
+  // Pass transformed plan and lookahead distance to check if robot is close enough to advance
+  if (path_handler_->checkAndAdvanceToNextInversionSegment(&transformed_plan, lookahead_dist)) {
     RCLCPP_INFO(logger_, "Advanced to next path segment");
     // Re-transform the plan after advancing to the next segment
     transformed_plan = path_handler_->transformGlobalPlan(
@@ -195,9 +198,6 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
   }
 
   global_path_pub_->publish(transformed_plan);
-
-  // Find look ahead distance and point on path and publish
-  double lookahead_dist = getLookAheadDistance(speed);
   double curv_lookahead_dist = params_->curvature_lookahead_dist;
 
   // Check for reverse driving

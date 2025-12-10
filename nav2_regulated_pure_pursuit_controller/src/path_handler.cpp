@@ -200,7 +200,8 @@ void PathHandler::removePosesAfterFirstInversion(nav_msgs::msg::Path & plan)
 }
 
 bool PathHandler::checkAndAdvanceToNextInversionSegment(
-  const nav_msgs::msg::Path * transformed_plan)
+  const nav_msgs::msg::Path * transformed_plan,
+  double lookahead_dist)
 {
   // Prune global plan to remove poses up to the first inversion
   removePosesAfterFirstInversion(global_plan_up_to_inversion_);
@@ -220,11 +221,24 @@ bool PathHandler::checkAndAdvanceToNextInversionSegment(
                            (prev_last_point_x_ < 0 && last_point_x >= 0);
         bool became_zero = (last_point_x == 0.0);
 
-        if (sign_changed || became_zero) {
+        // Check if all points in the remaining path are within lookahead distance
+        // This ensures the robot has progressed along the path and prevents false advancement
+        // on self-crossing paths or when an earlier part of the path is close to the endpoint
+        bool all_points_close = true;
+        for (const auto& pose : transformed_plan->poses) {
+          double dist = std::hypot(pose.pose.position.x, pose.pose.position.y);
+          if (dist > lookahead_dist) {
+            all_points_close = false;
+            break;
+          }
+        }
+
+        // Only advance if both sign changed AND all remaining path points are close
+        if ((sign_changed || became_zero) && all_points_close) {
           should_advance = true;
           RCLCPP_INFO(logger_,
-            "Advancing segment: last_point_x %.3f -> %.3f (sign_changed=%d, became_zero=%d)",
-            prev_last_point_x_, last_point_x, sign_changed, became_zero);
+            "Advancing segment: last_point_x %.3f -> %.3f, all points within %.3f (sign_changed=%d, became_zero=%d)",
+            prev_last_point_x_, last_point_x, lookahead_dist, sign_changed, became_zero);
         }
       }
 
